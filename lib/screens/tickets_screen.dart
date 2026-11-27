@@ -1,13 +1,20 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import '../models/ticket.dart';
 import '../services/api_service.dart';
 import '../database/database_helper.dart';
+import '../theme/app_palette.dart';
+import '../widgets/responsive_container.dart';
 import '../widgets/support_widget.dart';
 
 /// Tablero de tickets de soporte conectado a Supabase (vía API Node.js),
 /// con caché SQLite para lectura offline.
 class TicketsScreen extends StatefulWidget {
-  const TicketsScreen({super.key});
+  /// En producción se decide por plataforma: la PWA no tiene plugin SQLite.
+  /// El parámetro permite probar el comportamiento web sin emular `kIsWeb`.
+  const TicketsScreen({super.key, this.usarSQLite});
+
+  final bool? usarSQLite;
 
   @override
   State<TicketsScreen> createState() => _TicketsScreenState();
@@ -18,6 +25,8 @@ class _TicketsScreenState extends State<TicketsScreen> {
   bool _cargando = true;
   bool _modoOffline = false;
   String? _error;
+
+  bool get _usarSQLite => widget.usarSQLite ?? !kIsWeb;
 
   @override
   void initState() {
@@ -42,7 +51,9 @@ class _TicketsScreenState extends State<TicketsScreen> {
     if (mounted) setState(() => _cargando = true);
     try {
       final tickets = await ApiService.obtenerTickets();
-      await DatabaseHelper.sincronizarTickets(tickets);
+      if (_usarSQLite) {
+        await DatabaseHelper.sincronizarTickets(tickets);
+      }
       if (mounted) {
         setState(() {
           _tickets = tickets;
@@ -52,6 +63,32 @@ class _TicketsScreenState extends State<TicketsScreen> {
         });
       }
     } catch (e) {
+      if (e is SesionExpiradaException) {
+        await ApiService.cerrarSesion();
+        if (mounted) {
+          setState(() {
+            _tickets = [];
+            _modoOffline = false;
+            _error = e.toString();
+            _cargando = false;
+          });
+          _snack(e.toString(), error: true);
+        }
+        return;
+      }
+      if (!_usarSQLite) {
+        // La PWA solo trabaja con la API: no hay SQLite y no hay caché local.
+        if (mounted) {
+          setState(() {
+            _tickets = [];
+            _modoOffline = false;
+            _error = 'No fue posible obtener la información.';
+            _cargando = false;
+          });
+          _snack(_error!, error: true);
+        }
+        return;
+      }
       final locales = await DatabaseHelper.obtenerTicketsLocal();
       if (mounted) {
         setState(() {
@@ -68,7 +105,7 @@ class _TicketsScreenState extends State<TicketsScreen> {
     final creado = await showModalBottomSheet<Ticket>(
       context: context,
       isScrollControlled: true,
-      backgroundColor: const Color(0xFF1E1E1E),
+      backgroundColor: AppPalette.panel,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
@@ -80,7 +117,9 @@ class _TicketsScreenState extends State<TicketsScreen> {
       _tickets = [creado, ..._tickets];
       _modoOffline = false;
     });
-    await DatabaseHelper.sincronizarTickets(_tickets);
+    if (_usarSQLite) {
+      await DatabaseHelper.sincronizarTickets(_tickets);
+    }
     _snack('Ticket #${creado.id} creado. Te responderemos pronto.');
   }
 
@@ -123,18 +162,17 @@ class _TicketsScreenState extends State<TicketsScreen> {
             style: TextStyle(fontWeight: FontWeight.bold)),
       ),
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(16.0),
+        child: ResponsiveContainer(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Column(
+                  Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('SOPORTE',
+                      const Text('SOPORTE',
                           style: TextStyle(
                               fontSize: 10,
                               color: Colors.white54,
@@ -142,38 +180,18 @@ class _TicketsScreenState extends State<TicketsScreen> {
                       Text('Mis tickets',
                           style: TextStyle(
                               fontSize: 26, fontWeight: FontWeight.bold)),
+                      if (_modoOffline)
+                        Text(
+                          'Sin conexión: mostrando los tickets guardados.',
+                          style: TextStyle(
+                              color: Colors.orangeAccent, fontSize: 11),
+                        ),
                     ],
                   ),
-                  Row(
-                    children: [
-                      if (_modoOffline)
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 4),
-                          margin: const EdgeInsets.only(right: 8),
-                          decoration: BoxDecoration(
-                            color: Colors.orange.withValues(alpha: 0.2),
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: Colors.orangeAccent),
-                          ),
-                          child: const Row(
-                            children: [
-                              Icon(Icons.cloud_off,
-                                  size: 14, color: Colors.orangeAccent),
-                              SizedBox(width: 4),
-                              Text('OFFLINE',
-                                  style: TextStyle(
-                                      color: Colors.orangeAccent,
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.bold)),
-                            ],
-                          ),
-                        ),
-                      IconButton(
-                        icon: const Icon(Icons.refresh, color: Colors.white70),
-                        onPressed: _cargarTickets,
-                      ),
-                    ],
+                  IconButton(
+                    tooltip: 'Actualizar tickets',
+                    icon: const Icon(Icons.refresh, color: Colors.white70),
+                    onPressed: _cargarTickets,
                   ),
                 ],
               ),
@@ -237,7 +255,7 @@ class _TicketsScreenState extends State<TicketsScreen> {
 
   Widget _buildTicketCard(Ticket t) {
     return Card(
-      color: const Color(0xFF1E1E1E),
+      color: AppPalette.panel,
       margin: const EdgeInsets.only(bottom: 12),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Padding(

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../theme/app_palette.dart';
 
 /// Widget reutilizable de soporte: tarjeta con acceso rápido
 /// al formulario de creación de tickets.
@@ -20,21 +21,21 @@ class SupportWidget extends StatelessWidget {
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(16),
         gradient: const LinearGradient(
-          colors: [Color(0xFF2B0B3F), Color(0xFF1A1A1A)],
+          colors: [AppPalette.borde, AppPalette.panelOscuro],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
-        border: Border.all(color: const Color(0xFF9D4EDD).withValues(alpha: 0.5)),
+        border: Border.all(color: AppPalette.acento.withValues(alpha: 0.5)),
       ),
       child: Row(
         children: [
           Container(
             padding: const EdgeInsets.all(10),
-            decoration: const BoxDecoration(
-              color: Color(0xFF9D4EDD),
+            decoration: BoxDecoration(
+              color: AppPalette.acento,
               shape: BoxShape.circle,
             ),
-            child: const Icon(Icons.support_agent, color: Colors.white, size: 24),
+            child: Icon(Icons.support_agent, color: Colors.white, size: 24),
           ),
           const SizedBox(width: 12),
           Expanded(

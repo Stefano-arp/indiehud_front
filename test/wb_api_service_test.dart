@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:indiehud/services/api_service.dart';
+import 'package:indiehud/services/session_controller.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Pruebas White Box de ApiService usando MockClient.
@@ -48,6 +49,24 @@ void main() {
       expect(juegos.first.titulo, 'Neon Requiem');
     });
 
+    test('acepta el envelope paginado del backend', () async {
+      responder((_) async => http.Response(
+            jsonEncode({
+              'total_registros': 1,
+              'pagina_actual': 1,
+              'total_paginas': 1,
+              'datos': [
+                {'id': 7, 'titulo': 'Neon Requiem', 'precio': 19.99},
+              ],
+            }),
+            200,
+          ));
+
+      final juegos = await ApiService.obtenerJuegos();
+      expect(juegos.length, 1);
+      expect(juegos.first.titulo, 'Neon Requiem');
+    });
+
     test('envía buscar y categoria como query params (con trim)', () async {
       responder((_) async => http.Response('[]', 200));
 
@@ -78,9 +97,13 @@ void main() {
       );
     });
 
-    test('JSON inválido propaga FormatException', () async {
+    test('JSON inválido se convierte en error de usuario', () async {
       responder((_) async => http.Response('no-es-json', 200));
-      expect(() => ApiService.obtenerJuegos(), throwsFormatException);
+      expect(
+        () => ApiService.obtenerJuegos(),
+        throwsA(isA<Exception>().having((e) => e.toString(), 'mensaje',
+            contains('No fue posible obtener la información.'))),
+      );
     });
 
     test('sin respuesta dentro del timeout lanza TimeoutException', () async {
@@ -184,7 +207,11 @@ void main() {
   group('comprarJuego', () {
     test('sin token lanza Exception', () async {
       responder((_) async => http.Response('{}', 201));
-      expect(() => ApiService.comprarJuego(1), throwsA(isA<Exception>()));
+      expect(
+        () => ApiService.comprarJuego(1),
+        throwsA(isA<Exception>().having((e) => e.toString(), 'mensaje',
+            contains('Inicia sesión para comprar'))),
+      );
       expect(peticiones, isEmpty);
     });
 
@@ -204,6 +231,41 @@ void main() {
         () => ApiService.comprarJuego(8),
         throwsA(isA<Exception>().having((e) => e.toString(), 'mensaje',
             contains('Ya tienes este juego'))),
+      );
+    });
+  });
+
+  group('biblioteca: propiedad y borrado', () {
+    test('obtenerIdsBiblioteca parsea los ids con Bearer', () async {
+      SharedPreferences.setMockInitialValues({'jwt_token': 'token-1'});
+      responder((req) async {
+        expect(req.headers['Authorization'], 'Bearer token-1');
+        return http.Response('[3, 7]', 200);
+      });
+
+      expect(await ApiService.obtenerIdsBiblioteca(), <int>{3, 7});
+      expect(peticiones.single.url.path, endsWith('/biblioteca/ids'));
+    });
+
+    test('eliminarDeBiblioteca envía DELETE al juego correcto', () async {
+      SharedPreferences.setMockInitialValues({'jwt_token': 'token-1'});
+      responder((req) async {
+        expect(req.method, 'DELETE');
+        return http.Response('{"mensaje":"Juego eliminado de tu biblioteca"}', 200);
+      });
+
+      await ApiService.eliminarDeBiblioteca(12);
+      expect(peticiones.single.url.path, endsWith('/biblioteca/12'));
+    });
+
+    test('eliminarDeBiblioteca propaga el error del servidor', () async {
+      SharedPreferences.setMockInitialValues({'jwt_token': 'token-1'});
+      responder((_) async =>
+          http.Response('{"error":"Ese juego no está en tu biblioteca"}', 404));
+      expect(
+        () => ApiService.eliminarDeBiblioteca(12),
+        throwsA(isA<Exception>().having((e) => e.toString(), 'mensaje',
+            contains('no está en tu biblioteca'))),
       );
     });
   });
@@ -300,6 +362,40 @@ void main() {
       expect(await ApiService.leerToken(), isNull);
       final u = await ApiService.leerUsuario();
       expect(u['nombre'], isNull);
+    });
+
+    test('cerrar sesión conserva la sesión biométrica', () async {
+      await ApiService.guardarBiometria('bio-token', 'Ana', 'ana@test.com');
+      await ApiService.guardarSesion('t', 'Ana', 'ana@test.com');
+
+      await ApiService.cerrarSesion();
+
+      expect(await ApiService.biometriaActiva(), isTrue);
+      expect(await ApiService.restaurarSesionBiometrica(), isTrue);
+      expect(await ApiService.leerToken(), 'bio-token');
+
+      await ApiService.olvidarBiometria();
+      expect(await ApiService.biometriaActiva(), isFalse);
+    });
+
+    test('guardar y cerrar sesión actualizan el menú compartido', () async {
+      SessionController.activa.value = false;
+
+      await ApiService.guardarSesion('t', 'Ana', 'ana@test.com');
+      expect(SessionController.activa.value, isTrue);
+
+      await ApiService.cerrarSesion();
+      expect(SessionController.activa.value, isFalse);
+    });
+
+    test('sincronizarSesion restaura el menú desde el token guardado',
+        () async {
+      SharedPreferences.setMockInitialValues({'jwt_token': 'token-1'});
+      SessionController.activa.value = false;
+
+      await ApiService.sincronizarSesion();
+
+      expect(SessionController.activa.value, isTrue);
     });
   });
 }
