@@ -1,5 +1,7 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -30,6 +32,7 @@ class ApiService {
   static const _claveNombre = 'usuario_nombre';
   static const _claveCorreo = 'usuario_correo';
   static const _claveFoto = 'usuario_foto_url';
+  static const _claveRol = 'usuario_rol';
 
   static const _claveBioToken = 'biometrica_token';
   static const _claveBioNombre = 'biometrica_nombre';
@@ -40,6 +43,25 @@ class ApiService {
   static Future<void> sincronizarSesion() async {
     final token = await leerToken();
     SessionController.activa.value = token != null && token.isNotEmpty;
+    SessionController.rol.value = token == null ? 'usuario' : _rolDelToken(token);
+  }
+
+  /// Lee el rol directamente del JWT para restaurar el panel tras recargar.
+  static String _rolDelToken(String token) {
+    try {
+      final partes = token.split('.');
+      if (partes.length < 2) return 'usuario';
+      var payload = partes[1];
+      payload = payload.padRight(
+        payload.length + (4 - payload.length % 4) % 4,
+        '=',
+      );
+      final decoded = json.decode(utf8.decode(base64Url.decode(payload)));
+      final rol = decoded is Map<String, dynamic> ? decoded['rol']?.toString() : null;
+      return ['desarrollador', 'soporte'].contains(rol) ? rol! : 'usuario';
+    } catch (_) {
+      return 'usuario';
+    }
   }
 
   /// Calienta el backend en segundo plano al arrancar la app.
@@ -87,12 +109,15 @@ class ApiService {
     String nombre,
     String correo, {
     String? fotoUrl,
+    String rol = 'usuario',
   }) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_claveToken, token);
     await prefs.setString(_claveNombre, nombre);
     await prefs.setString(_claveCorreo, correo);
+    await prefs.setString(_claveRol, rol);
     if (fotoUrl != null) await prefs.setString(_claveFoto, fotoUrl);
+    SessionController.rol.value = rol;
     SessionController.activa.value = true;
   }
 
@@ -107,15 +132,23 @@ class ApiService {
       'nombre': prefs.getString(_claveNombre),
       'correo': prefs.getString(_claveCorreo),
       'foto_url': prefs.getString(_claveFoto),
+      'rol': prefs.getString(_claveRol) ?? 'usuario',
     };
   }
 
   static Future<void> cerrarSesion() async {
     final prefs = await SharedPreferences.getInstance();
     // Conserva el token biométrico para permitir "Entrar con huella".
-    for (final clave in [_claveToken, _claveNombre, _claveCorreo, _claveFoto]) {
+    for (final clave in [
+      _claveToken,
+      _claveNombre,
+      _claveCorreo,
+      _claveFoto,
+      _claveRol,
+    ]) {
       await prefs.remove(clave);
     }
+    SessionController.rol.value = 'usuario';
     SessionController.activa.value = false;
   }
 
@@ -227,7 +260,11 @@ class ApiService {
     final response = await httpClient.post(
       Uri.parse('$baseUrl/login'),
       headers: {'Content-Type': 'application/json'},
-      body: json.encode({'correo': correo, 'password': password}),
+      body: json.encode({
+        'correo': correo,
+        'password': password,
+        'plataforma': kIsWeb ? 'web' : 'movil',
+      }),
     ).timeout(timeout);
 
     final data = _mapa(response.body);
@@ -238,14 +275,32 @@ class ApiService {
     final usuario = data['usuario'] is Map<String, dynamic>
         ? data['usuario'] as Map<String, dynamic>
         : <String, dynamic>{};
+    final rol = usuario['rol']?.toString() ?? 'usuario';
 
     await guardarSesion(
       data['token']?.toString() ?? '',
       usuario['nombre']?.toString() ?? 'Jugador',
       usuario['correo']?.toString() ?? correo,
       fotoUrl: usuario['foto_url']?.toString(),
+      rol: rol,
     );
     return data;
+  }
+
+  /// Consulta el rol sin crear sesión: el login web decide si pide huella.
+  static Future<String> consultarRolAcceso(String correo, String password) async {
+    final response = await httpClient.post(
+      Uri.parse('$baseUrl/rol-acceso'),
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode({'correo': correo, 'password': password}),
+    ).timeout(timeout);
+
+    final data = _mapa(response.body);
+    if (response.statusCode != 200) {
+      throw Exception(_error(data, 'Correo o contraseña incorrectos'));
+    }
+    final rol = data['rol']?.toString() ?? 'usuario';
+    return ['desarrollador', 'soporte'].contains(rol) ? rol : 'usuario';
   }
 
   // ==========================================================
@@ -299,6 +354,7 @@ class ApiService {
       usuario['nombre']?.toString() ?? nombre,
       usuario['correo']?.toString() ?? correo,
       fotoUrl: usuario['foto_url']?.toString(),
+      rol: usuario['rol']?.toString() ?? SessionController.rol.value,
     );
     return data;
   }
@@ -502,6 +558,198 @@ class ApiService {
   }
 
   // ==========================================================
+  // PANELES STAFF (SOLO WEB)
+  // ==========================================================
+  static Future<Map<String, dynamic>> obtenerEstadisticasDesarrollador() async {
+    final token = await leerToken();
+    if (token == null) throw const SesionExpiradaException();
+
+    final response = await httpClient.get(
+      Uri.parse('$baseUrl/desarrollador/estadisticas'),
+      headers: {'Authorization': 'Bearer $token'},
+    ).timeout(timeout);
+
+    if (response.statusCode == 401) throw const SesionExpiradaException();
+    if (response.statusCode != 200) {
+      throw Exception(_error(_mapa(response.body), 'No fue posible obtener la información.'));
+    }
+    return _mapa(response.body);
+  }
+
+  static Future<Map<String, dynamic>> _enviarJuego(
+    String metodo, {
+    int? id,
+    required String titulo,
+    required String descripcion,
+    required String categoria,
+    required double precio,
+    required String desarrollador,
+    String? portadaUrl,
+    Uint8List? portadaBytes,
+    String? portadaMime,
+    required int codigoEsperado,
+    required String mensajeError,
+  }) async {
+    final token = await leerToken();
+    if (token == null) throw const SesionExpiradaException();
+    if (portadaBytes == null && (portadaUrl == null || portadaUrl.trim().isEmpty)) {
+      throw Exception('Sube una portada o indica una URL');
+    }
+
+    final ruta = id == null ? '$baseUrl/juegos' : '$baseUrl/juegos/$id';
+    final request = http.MultipartRequest(metodo, Uri.parse(ruta))
+      ..headers['Authorization'] = 'Bearer $token'
+      ..fields['titulo'] = titulo.trim()
+      ..fields['descripcion'] = descripcion.trim()
+      ..fields['categoria'] = categoria.trim()
+      ..fields['precio'] = precio.toStringAsFixed(2)
+      ..fields['desarrollador'] = desarrollador.trim();
+
+    if (portadaBytes != null) {
+      final mime = portadaMime ?? 'image/png';
+      final partes = mime.split('/');
+      final extension = partes.length > 1 ? partes[1].replaceAll('jpeg', 'jpg') : 'png';
+      request.files.add(
+        http.MultipartFile.fromBytes(
+          'portada',
+          portadaBytes,
+          filename: 'portada.$extension',
+          contentType: http.MediaType(partes[0], partes.length > 1 ? partes[1] : 'png'),
+        ),
+      );
+    } else {
+      request.fields['portada_url'] = portadaUrl!.trim();
+    }
+
+    final streamed = await httpClient.send(request).timeout(timeout);
+    final response = await http.Response.fromStream(streamed);
+    final data = _mapa(response.body);
+    if (response.statusCode == 401) throw const SesionExpiradaException();
+    if (response.statusCode != codigoEsperado) {
+      throw Exception(_error(data, mensajeError));
+    }
+    return data;
+  }
+
+  static Future<Map<String, dynamic>> publicarJuego({
+    required String titulo,
+    required String descripcion,
+    required String categoria,
+    required double precio,
+    required String desarrollador,
+    String? portadaUrl,
+    Uint8List? portadaBytes,
+    String? portadaMime,
+  }) {
+    return _enviarJuego(
+      'POST',
+      titulo: titulo,
+      descripcion: descripcion,
+      categoria: categoria,
+      precio: precio,
+      desarrollador: desarrollador,
+      portadaUrl: portadaUrl,
+      portadaBytes: portadaBytes,
+      portadaMime: portadaMime,
+      codigoEsperado: 201,
+      mensajeError: 'No se pudo publicar el juego',
+    );
+  }
+
+  static Future<Map<String, dynamic>> actualizarJuego(
+    int id, {
+    required String titulo,
+    required String descripcion,
+    required String categoria,
+    required double precio,
+    required String desarrollador,
+    String? portadaUrl,
+    Uint8List? portadaBytes,
+    String? portadaMime,
+  }) {
+    return _enviarJuego(
+      'PUT',
+      id: id,
+      titulo: titulo,
+      descripcion: descripcion,
+      categoria: categoria,
+      precio: precio,
+      desarrollador: desarrollador,
+      portadaUrl: portadaUrl,
+      portadaBytes: portadaBytes,
+      portadaMime: portadaMime,
+      codigoEsperado: 200,
+      mensajeError: 'No se pudo actualizar el juego',
+    );
+  }
+
+  static Future<void> eliminarJuego(int id) async {
+    final token = await leerToken();
+    if (token == null) throw const SesionExpiradaException();
+
+    final response = await httpClient.delete(
+      Uri.parse('$baseUrl/juegos/$id'),
+      headers: {'Authorization': 'Bearer $token'},
+    ).timeout(timeout);
+
+    if (response.statusCode == 401) throw const SesionExpiradaException();
+    if (response.statusCode != 200 && response.statusCode != 204) {
+      throw Exception(
+        _error(_mapa(response.body), 'No se pudo eliminar el juego'),
+      );
+    }
+  }
+
+  static Future<List<Map<String, dynamic>>> obtenerTicketsSoporte() async {
+    final token = await leerToken();
+    if (token == null) throw const SesionExpiradaException();
+
+    final response = await httpClient.get(
+      Uri.parse('$baseUrl/soporte/tickets'),
+      headers: {'Authorization': 'Bearer $token'},
+    ).timeout(timeout);
+
+    if (response.statusCode == 401) throw const SesionExpiradaException();
+    final datos = _lista(response.body);
+    if (response.statusCode == 200 && datos != null) {
+      return datos
+          .whereType<Map<String, dynamic>>()
+          .map((ticket) => Map<String, dynamic>.from(ticket))
+          .toList();
+    }
+    throw Exception(
+      _error(_mapa(response.body), 'No fue posible obtener la información.'),
+    );
+  }
+
+  static Future<void> actualizarTicketSoporte(
+    int id, {
+    String? estado,
+    String? respuesta,
+  }) async {
+    final token = await leerToken();
+    if (token == null) throw const SesionExpiradaException();
+
+    final body = <String, dynamic>{};
+    if (estado != null) body['estado'] = estado;
+    if (respuesta != null) body['respuesta'] = respuesta;
+
+    final response = await httpClient.patch(
+      Uri.parse('$baseUrl/soporte/tickets/$id'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $token',
+      },
+      body: json.encode(body),
+    ).timeout(timeout);
+
+    if (response.statusCode == 401) throw const SesionExpiradaException();
+    if (response.statusCode != 200) {
+      throw Exception(_error(_mapa(response.body), 'No se pudo actualizar el ticket'));
+    }
+  }
+
+  // ==========================================================
   // BIOMETRÍA WEB -> APP
   // ==========================================================
   static Future<Map<String, dynamic>> solicitarBiometriaWeb(
@@ -578,6 +826,7 @@ class ApiService {
         usuario['nombre']?.toString() ?? 'Jugador',
         usuario['correo']?.toString() ?? '',
         fotoUrl: usuario['foto_url']?.toString(),
+        rol: usuario['rol']?.toString() ?? 'usuario',
       );
       return 'aprobada';
     }

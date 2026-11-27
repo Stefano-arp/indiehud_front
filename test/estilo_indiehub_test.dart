@@ -49,7 +49,7 @@ void main() {
     expect(splash, contains('@color/indiehub_fondo'));
 
     final serviceWorker = File('web/pwa_service_worker.js').readAsStringSync();
-    expect(serviceWorker, contains("const CACHE = 'indiehub-shell-v3';"));
+    expect(serviceWorker, contains("const CACHE = 'indiehub-shell-v7';"));
   });
 
   testWidgets('el shell web usa el fondo de la app', (tester) async {

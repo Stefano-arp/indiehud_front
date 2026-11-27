@@ -40,6 +40,7 @@ void main() {
   tearDown(() {
     ApiService.httpClient = http.Client();
     SessionController.activa.value = false;
+    SessionController.seccion.value = 0;
   });
 
   Future<void> montar(WidgetTester tester, {double ancho = 1200}) async {
@@ -83,6 +84,12 @@ void main() {
     expect(find.text('NAVEGACIÓN'), findsNothing);
     expect(find.text('Mi cuenta'), findsNothing);
     expect(find.text('Iniciar sesión'), findsNothing);
+
+    final buscador = tester.getCenter(find.byType(TextField));
+    final navegacion = tester.getCenter(find.text('TIENDA'));
+    final sesion = tester.getCenter(find.byIcon(Icons.logout));
+    expect(buscador.dx, greaterThan(navegacion.dx));
+    expect(sesion.dx, greaterThan(buscador.dx));
   });
 
   testWidgets('la Tienda web tiene un buscador, secciones y pie',
@@ -99,6 +106,28 @@ void main() {
     expect(find.text('Catálogo'), findsOneWidget);
   });
 
+  testWidgets('sin sesión el botón Iniciar sesión abre el acceso',
+      (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues({});
+    SessionController.activa.value = false;
+    SessionController.seccion.value = 0;
+
+    await montar(tester);
+
+    expect(find.text('Iniciar sesión'), findsOneWidget);
+    await tester.tap(find.text('Iniciar sesión'));
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('Correo electrónico'), findsOneWidget);
+    expect(find.text('Contraseña'), findsOneWidget);
+    // El formulario sustituye al botón, no se duplica el rótulo.
+    expect(find.text('Iniciar sesión'), findsOneWidget);
+    expect(find.text('BIBLIOTECA'), findsNothing);
+    expect(find.text('SOPORTE'), findsNothing);
+    expect(find.text('PERFIL'), findsNothing);
+  });
+
   testWidgets('el pie con sesión ofrece ayuda sin duplicar el menú',
       (WidgetTester tester) async {
     SharedPreferences.setMockInitialValues({
@@ -112,6 +141,21 @@ void main() {
     expect(find.text('Centro de ayuda'), findsOneWidget);
     expect(find.text('Mi cuenta'), findsNothing);
     expect(find.text('BIBLIOTECA'), findsOneWidget);
+  });
+
+  testWidgets('la cabecera llega a los bordes en pantallas anchas',
+      (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues({});
+    SessionController.activa.value = false;
+
+    await montar(tester, ancho: 1920);
+
+    final logo = tester.getCenter(find.byIcon(Icons.sports_esports).first);
+    expect(
+      logo.dx,
+      lessThan(70),
+      reason: 'El logo debe quedar cerca del borde izquierdo con padding lateral',
+    );
   });
 
   testWidgets('el distribución mantiene un solo buscador de 800 a 1920 px',

@@ -8,9 +8,11 @@ import '../services/api_service.dart';
 import '../services/session_controller.dart';
 import '../theme/app_palette.dart';
 import '../widgets/store_sections.dart';
+import 'desarrollador_panel_screen.dart';
 import 'game_detail_screen.dart';
 import 'library_screen.dart';
 import 'profile_screen.dart';
+import 'soporte_panel_screen.dart';
 import 'tickets_screen.dart';
 
 // La web comparte exactamente la paleta de Android: negro + verde neón + morado.
@@ -61,13 +63,23 @@ class _SteamWebShellState extends State<SteamWebShell> {
   String _nombreUsuario = '';
   final FiltrosTienda _filtros = FiltrosTienda();
 
-  static const _etiquetas = ['Tienda', 'Biblioteca', 'Soporte', 'Perfil'];
-  static const _iconos = [
+  static const _etiquetasUsuario = ['Tienda', 'Biblioteca', 'Soporte', 'Perfil'];
+  static const _iconosUsuario = [
     Icons.storefront_outlined,
     Icons.grid_view_rounded,
     Icons.support_agent,
     Icons.person_outline,
   ];
+
+  /// Las cuentas staff solo ven su propio panel, nunca el menú de la tienda.
+  List<String> get _etiquetas => SessionController.esStaff
+      ? [SessionController.esDesarrollador ? 'Panel' : 'Tickets']
+      : _etiquetasUsuario;
+  List<IconData> get _iconos => SessionController.esStaff
+      ? [SessionController.esDesarrollador
+          ? Icons.dashboard_outlined
+          : Icons.support_agent]
+      : _iconosUsuario;
 
   @override
   void initState() {
@@ -76,6 +88,7 @@ class _SteamWebShellState extends State<SteamWebShell> {
     ApiService.sincronizarSesion().then((_) => _cargarNombre());
     SessionController.activa.addListener(_onSesion);
     SessionController.seccion.addListener(_onSeccion);
+    SessionController.rol.addListener(_onRol);
     _cargarNombre();
   }
 
@@ -83,6 +96,7 @@ class _SteamWebShellState extends State<SteamWebShell> {
   void dispose() {
     SessionController.activa.removeListener(_onSesion);
     SessionController.seccion.removeListener(_onSeccion);
+    SessionController.rol.removeListener(_onRol);
     _filtros.dispose();
     super.dispose();
   }
@@ -100,10 +114,19 @@ class _SteamWebShellState extends State<SteamWebShell> {
     _cargarNombre();
   }
 
+  void _onRol() {
+    if (mounted) setState(() {});
+  }
+
   void _onSeccion() {
-    final destino = SessionController.activa.value
-        ? SessionController.seccion.value
-        : 0;
+    final seccion = SessionController.seccion.value;
+    // Sin sesión solo se permite la sección 3: es la pantalla de acceso
+    // abierta desde el botón de la cabecera, no una pestaña del menú.
+    final destino = SessionController.esStaff
+        ? 0
+        : SessionController.activa.value
+            ? seccion
+            : (seccion == 3 ? 3 : 0);
     if (destino != _indice && mounted) {
       setState(() => _indice = destino);
     }
@@ -122,6 +145,11 @@ class _SteamWebShellState extends State<SteamWebShell> {
     if (mounted) setState(() => _indice = SessionController.seccion.value);
   }
 
+  void _abrirAcceso() {
+    SessionController.abrirAcceso();
+    if (mounted) setState(() => _indice = 3);
+  }
+
   Future<void> _cerrarSesion() async {
     await ApiService.cerrarSesion();
     try {
@@ -138,15 +166,20 @@ class _SteamWebShellState extends State<SteamWebShell> {
       valueListenable: SessionController.activa,
       builder: (context, conSesion, _) {
         final ancho = MediaQuery.sizeOf(context).width;
-        final enTienda = _indice == 0;
-        final pantalla = switch (_indice) {
-          1 => LibraryScreen(
-              catalogo: _filtros.ultimoCatalogo,
-            ),
-          2 => const TicketsScreen(),
-          3 => const ProfileScreen(),
-          _ => SteamWebHome(filtros: _filtros, mostrarChips: ancho < 900),
-        };
+        final staff = SessionController.esStaff;
+        final enTienda = !staff && _indice == 0;
+        final pantalla = staff
+            ? SessionController.esDesarrollador
+                ? const DesarrolladorPanelScreen()
+                : const SoportePanelScreen()
+            : switch (_indice) {
+                1 => LibraryScreen(
+                    catalogo: _filtros.ultimoCatalogo,
+                  ),
+                2 => const TicketsScreen(),
+                3 => const ProfileScreen(),
+                _ => SteamWebHome(filtros: _filtros, mostrarChips: ancho < 900),
+              };
 
         return Scaffold(
           backgroundColor: _fondo,
@@ -174,19 +207,24 @@ class _SteamWebShellState extends State<SteamWebShell> {
 
   Widget _barraSuperior(double ancho, bool conSesion) {
     final conEtiquetas = ancho >= 1100;
+    final staff = SessionController.esStaff;
+    final lema = SessionController.esDesarrollador
+        ? 'PANEL DEV'
+        : SessionController.esSoporte
+            ? 'SOPORTE'
+            : 'TIENDA INDIE';
     return Container(
       height: 64,
       decoration: BoxDecoration(
         color: _panelClaro,
         border: Border(bottom: BorderSide(color: _borde)),
       ),
-      child: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 1320),
-          child: Padding(
-            padding: EdgeInsets.symmetric(horizontal: ancho < 700 ? 12 : 28),
-            child: Row(
-              children: [
+      child: Padding(
+        padding: EdgeInsets.symmetric(
+          horizontal: ancho < 700 ? 12 : ancho >= 1400 ? 40 : 28,
+        ),
+        child: Row(
+          children: [
                 Container(
                   width: 36,
                   height: 36,
@@ -206,7 +244,7 @@ class _SteamWebShellState extends State<SteamWebShell> {
                               fontSize: 18,
                               fontWeight: FontWeight.bold,
                               letterSpacing: 1)),
-                      Text('TIENDA INDIE',
+                      Text(lema,
                           style: TextStyle(
                               color: _morado, fontSize: 9, letterSpacing: 2)),
                     ],
@@ -224,7 +262,10 @@ class _SteamWebShellState extends State<SteamWebShell> {
                       ),
                     ),
                   ),
-                if (_indice == 0)
+                const Spacer(),
+                // Buscador a la derecha, junto a la cuenta y al cierre de sesión.
+                // Los paneles staff no tienen catálogo que buscar.
+                if (!staff && _indice == 0)
                   Flexible(
                     flex: 2,
                     child: Padding(
@@ -238,7 +279,6 @@ class _SteamWebShellState extends State<SteamWebShell> {
                       ),
                     ),
                   ),
-                const Spacer(),
                 if (conSesion) ...[
                   if (ancho >= 900 && _nombreUsuario.isNotEmpty)
                     Padding(
@@ -262,9 +302,9 @@ class _SteamWebShellState extends State<SteamWebShell> {
                         : const SizedBox.shrink(),
                     style: TextButton.styleFrom(foregroundColor: _texto),
                   ),
-                ] else
+                ] else if (_indice != 3)
                   ElevatedButton.icon(
-                    onPressed: () => _irA(3),
+                    onPressed: _abrirAcceso,
                     icon: const Icon(Icons.login, size: 16),
                     label: const Text('Iniciar sesión',
                         style: TextStyle(fontWeight: FontWeight.bold)),
@@ -275,9 +315,7 @@ class _SteamWebShellState extends State<SteamWebShell> {
                           borderRadius: BorderRadius.circular(6)),
                     ),
                   ),
-              ],
-            ),
-          ),
+          ],
         ),
       ),
     );
@@ -358,6 +396,7 @@ class _SteamWebShellState extends State<SteamWebShell> {
 
   Widget _pie(bool conSesion) {
     final ancho = MediaQuery.sizeOf(context).width;
+    final staff = SessionController.esStaff;
     return Container(
       height: 44,
       decoration: BoxDecoration(
@@ -375,13 +414,14 @@ class _SteamWebShellState extends State<SteamWebShell> {
                   'IndieHub · Juegos independientes',
                   style: TextStyle(color: Colors.white38, fontSize: 11),
                 ),
-                const Spacer(),
-                TextButton(
-                  onPressed: () => _irA(0),
-                  child: const Text('Catálogo',
-                      style: TextStyle(fontSize: 11, color: _texto)),
-                ),
-                if (conSesion && ancho >= 700)
+                if (!staff) const Spacer(),
+                if (!staff)
+                  TextButton(
+                    onPressed: () => _irA(0),
+                    child: const Text('Catálogo',
+                        style: TextStyle(fontSize: 11, color: _texto)),
+                  ),
+                if (conSesion && !staff && ancho >= 700)
                   TextButton(
                     onPressed: () => _irA(2),
                     child: const Text('Centro de ayuda',

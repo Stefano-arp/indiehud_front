@@ -431,11 +431,45 @@ class _ProfileScreenState extends State<ProfileScreen> {
       }
 
       if (kIsWeb) {
+        // Las cuentas staff entran directo: nunca se les pide huella.
+        String rol;
+        try {
+          rol = await ApiService.consultarRolAcceso(correo, password);
+        } catch (_) {
+          // Si el endpoint aún no está desplegado, el login devuelve el rol.
+          final res = await ApiService.login(correo, password);
+          final usuario = res['usuario'] is Map<String, dynamic>
+              ? res['usuario'] as Map<String, dynamic>
+              : <String, dynamic>{};
+          final rolLogin = usuario['rol']?.toString() ?? 'usuario';
+          if (rolLogin != 'usuario') {
+            _aplicarSesion(res);
+            _mostrarSnack('¡Bienvenido $_nombreUsuario!');
+            return;
+          }
+          await ApiService.cerrarSesion();
+          await _iniciarVerificacionWeb(correo, password);
+          return;
+        }
+        if (rol != 'usuario') {
+          final res = await ApiService.login(correo, password);
+          _aplicarSesion(res);
+          _mostrarSnack('¡Bienvenido $_nombreUsuario!');
+          return;
+        }
         await _iniciarVerificacionWeb(correo, password);
         return;
       }
 
       final res = await ApiService.login(correo, password);
+      final datosUsuario = res['usuario'] is Map<String, dynamic>
+          ? res['usuario'] as Map<String, dynamic>
+          : <String, dynamic>{};
+      final rol = datosUsuario['rol']?.toString() ?? 'usuario';
+      if (rol != 'usuario') {
+        await ApiService.cerrarSesion();
+        throw Exception('Esta cuenta solo está disponible en la web');
+      }
       _aplicarSesion(res);
       _mostrarSnack('¡Bienvenido $_nombreUsuario!');
       await _preguntarActivarHuella();
