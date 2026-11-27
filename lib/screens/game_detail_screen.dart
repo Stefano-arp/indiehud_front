@@ -18,10 +18,14 @@ class GameDetailScreen extends StatefulWidget {
   /// `true` cuando la ficha se abre desde la biblioteca.
   final bool enBiblioteca;
 
+  /// Catálogo ya cargado para mostrar juegos similares sin otra petición.
+  final List<Juego>? relacionados;
+
   const GameDetailScreen({
     super.key,
     required this.juego,
     this.enBiblioteca = false,
+    this.relacionados,
   });
 
   @override
@@ -35,11 +39,14 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
   bool _conSesion = false;
   bool _enBiblioteca = false;
   bool _falloVerificacion = false;
+  List<Juego> _relacionados = const [];
 
   @override
   void initState() {
     super.initState();
+    _relacionados = widget.relacionados ?? const [];
     _verificarEstado();
+    if (widget.relacionados == null) _cargarRelacionados();
   }
 
   Future<void> _verificarEstado() async {
@@ -84,6 +91,25 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
       _falloVerificacion = false;
     });
     await _verificarEstado();
+  }
+
+  /// Fallback para fichas abiertas sin catálogo previo (por ejemplo, desde
+  /// notificaciones o enlaces directos). Nunca bloquea la ficha si falla.
+  Future<void> _cargarRelacionados() async {
+    try {
+      final juegos = await ApiService.obtenerJuegos(
+        categoria: widget.juego.categoria,
+      );
+      if (!mounted) return;
+      setState(() {
+        _relacionados = juegos
+            .where((otro) => otro.id != widget.juego.id)
+            .take(6)
+            .toList();
+      });
+    } catch (_) {
+      // Sección opcional: la ficha sigue siendo útil sin juegos similares.
+    }
   }
 
   void _mostrarSnack(String msg, {bool error = false}) {
@@ -159,6 +185,18 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
     }
   }
 
+  void _abrirRelacionado(Juego juego) {
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(
+        builder: (_) => GameDetailScreen(
+          juego: juego,
+          relacionados: _relacionados,
+        ),
+      ),
+    );
+  }
+
   /// Cambia de pestaña y cierra la ficha (móvil y web comparten el notificador).
   void _irA(int seccion) {
     SessionController.irA(seccion);
@@ -198,6 +236,182 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
         label: Text(texto,
             style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
       ),
+    );
+  }
+
+  Widget _tituloSeccion(String texto) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Text(
+        texto,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 15,
+          fontWeight: FontWeight.bold,
+          letterSpacing: 0.5,
+        ),
+      ),
+    );
+  }
+
+  Widget _capturas() {
+    final base = widget.juego.portadaUrl;
+    final separador = base.contains('?') ? '&' : '?';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _tituloSeccion('CAPTURAS'),
+        SizedBox(
+          height: 112,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: 3,
+            separatorBuilder: (_, __) => const SizedBox(width: 10),
+            itemBuilder: (context, index) => ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: Image.network(
+                '$base${separador}cap=$index',
+                width: 190,
+                height: 112,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => Container(
+                  width: 190,
+                  color: AppPalette.borde,
+                  child: Center(
+                    child: Icon(Icons.gamepad,
+                        color: AppPalette.acentoPrincipal, size: 28),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _dato(String etiqueta, String valor) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: AppPalette.panel,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppPalette.borde),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(etiqueta,
+              style: const TextStyle(
+                  color: Colors.white38,
+                  fontSize: 10,
+                  letterSpacing: 1)),
+          const SizedBox(height: 3),
+          Text(valor,
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold)),
+        ],
+      ),
+    );
+  }
+
+  Widget _detalles() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _tituloSeccion('DETALLES'),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            _dato('Desarrollador', widget.juego.desarrollador),
+            _dato('Categoría', widget.juego.categoria),
+            _dato('Precio', '\$${widget.juego.precio.toStringAsFixed(2)}'),
+            _dato('Identificador', '#${widget.juego.id}'),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _similares() {
+    if (_relacionados.isEmpty) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _tituloSeccion('JUEGOS SIMILARES'),
+        SizedBox(
+          height: 122,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: _relacionados.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 10),
+            itemBuilder: (context, index) {
+              final otro = _relacionados[index];
+              return InkWell(
+                onTap: () => _abrirRelacionado(otro),
+                child: Container(
+                  width: 170,
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: AppPalette.panel,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: AppPalette.borde),
+                  ),
+                  child: Row(
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(6),
+                        child: Image.network(
+                          otro.portadaUrl,
+                          width: 62,
+                          height: 80,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => Container(
+                            width: 62,
+                            height: 80,
+                            color: AppPalette.borde,
+                            child: Icon(Icons.gamepad,
+                                color: AppPalette.acentoPrincipal),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Text(
+                              otro.titulo,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              '\$${otro.precio.toStringAsFixed(2)}',
+                              style: const TextStyle(
+                                color: AppPalette.acentoPrincipal,
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 
@@ -322,6 +536,41 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
     final informacion = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        Wrap(
+          spacing: 6,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            TextButton(
+              onPressed: () => _irA(0),
+              style: TextButton.styleFrom(
+                foregroundColor: AppPalette.textoSuave,
+                padding: EdgeInsets.zero,
+                minimumSize: const Size(0, 24),
+              ),
+              child: const Text('TIENDA',
+                  style: TextStyle(fontSize: 11, letterSpacing: 1)),
+            ),
+            const Text('›', style: TextStyle(color: Colors.white38)),
+            Text(
+              juego.categoria.toUpperCase(),
+              style: const TextStyle(
+                  color: AppPalette.secundario,
+                  fontSize: 11,
+                  letterSpacing: 1),
+            ),
+            const Text('›', style: TextStyle(color: Colors.white38)),
+            SizedBox(
+              width: 120,
+              child: Text(
+                juego.titulo,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Colors.white70, fontSize: 11),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
         Row(
           children: [
             Container(
@@ -358,7 +607,7 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
         Text('Desarrollado por ${juego.desarrollador}',
             style: const TextStyle(color: Colors.white54, fontSize: 14)),
         const SizedBox(height: 16),
-        const Text('SINOPSIS',
+        const Text('ACERCA DE ESTE JUEGO',
             style: TextStyle(
                 color: Colors.white54, fontSize: 12, letterSpacing: 1.5)),
         const SizedBox(height: 6),
@@ -378,6 +627,17 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
             textAlign: TextAlign.center,
           ),
         ),
+      ],
+    );
+
+    final contenidos = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _capturas(),
+        const SizedBox(height: 22),
+        _detalles(),
+        const SizedBox(height: 22),
+        _similares(),
       ],
     );
 
@@ -401,6 +661,8 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
                     portada,
                     const SizedBox(height: 16),
                     informacion,
+                    const SizedBox(height: 24),
+                    contenidos,
                   ],
                 ),
               );
@@ -409,9 +671,32 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(flex: 5, child: portada),
+                  Expanded(
+                    flex: 5,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        portada,
+                        const SizedBox(height: 20),
+                        contenidos,
+                      ],
+                    ),
+                  ),
                   const SizedBox(width: 28),
-                  Expanded(flex: 4, child: informacion),
+                  Expanded(
+                    flex: 4,
+                    child: Card(
+                      color: AppPalette.panel,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                        side: BorderSide(color: AppPalette.borde),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.all(18),
+                        child: informacion,
+                      ),
+                    ),
+                  ),
                 ],
               ),
             );

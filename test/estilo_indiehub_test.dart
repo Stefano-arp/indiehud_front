@@ -47,6 +47,9 @@ void main() {
         File('android/app/src/main/res/drawable/launch_background.xml')
             .readAsStringSync();
     expect(splash, contains('@color/indiehub_fondo'));
+
+    final serviceWorker = File('web/pwa_service_worker.js').readAsStringSync();
+    expect(serviceWorker, contains("const CACHE = 'indiehub-shell-v3';"));
   });
 
   testWidgets('el shell web usa el fondo de la app', (tester) async {

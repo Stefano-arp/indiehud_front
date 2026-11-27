@@ -171,6 +171,91 @@ void main() {
     expect(find.text('YA ESTÁ EN TU BIBLIOTECA'), findsNothing);
   });
 
+  testWidgets('la ficha muestra juegos similares recibidos', (tester) async {
+    final otro = Juego(
+      id: 9,
+      titulo: 'Neon Drift',
+      descripcion: 'Otro viaje neonado.',
+      precio: 7.5,
+      desarrollador: 'DriftTeam',
+      portadaUrl: 'https://images.unsplash.com/otro',
+      categoria: 'Acción',
+    );
+
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: GameDetailScreen(
+          juego: juego,
+          relacionados: [otro],
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.text('JUEGOS SIMILARES'), findsOneWidget);
+    expect(find.text('Neon Drift'), findsOneWidget);
+  });
+
+  testWidgets('la biblioteca alterna vista y filtra localmente',
+      (tester) async {
+    await ApiService.guardarSesion('token', 'Ana', 'ana@test.com');
+    ApiService.httpClient = MockClient((req) async {
+      if (req.url.path.endsWith('/biblioteca')) {
+        return http.Response(
+          jsonEncode([
+            juego.toMap()
+              ..['portada_url'] = juego.portadaUrl
+              ..['es_favorito'] = 0,
+            {
+              'id': 9,
+              'titulo': 'Neon Drift',
+              'descripcion': 'Otro viaje neonado.',
+              'precio': 7.5,
+              'desarrollador': 'DriftTeam',
+              'portada_url': 'https://images.unsplash.com/otro',
+              'categoria': 'Acción',
+            },
+          ]),
+          200,
+        );
+      }
+      return http.Response('[]', 200);
+    });
+
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockStreamHandler(
+      const EventChannel('dev.fluttercommunity.plus/connectivity_status'),
+      _ConnectivityMock(),
+    );
+
+    await tester.pumpWidget(
+      const MaterialApp(home: Scaffold(body: LibraryScreen())),
+    );
+    for (var i = 0; i < 5; i++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 200)),
+      );
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    for (var i = 0; i < 4; i++) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+
+    await tester.tap(find.byIcon(Icons.view_list));
+    for (var i = 0; i < 4; i++) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    expect(find.byIcon(Icons.more_horiz), findsNWidgets(2));
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getBool('biblioteca_vista_lista'), isTrue);
+
+    await tester.enterText(find.byType(TextField).first, 'Requiem');
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(find.text('Neon Requiem'), findsOneWidget);
+    expect(find.text('Neon Drift'), findsNothing);
+  });
+
   testWidgets('el menú de biblioteca elimina de verdad la compra',
       (tester) async {
     await ApiService.guardarSesion('token', 'Ana', 'ana@test.com');

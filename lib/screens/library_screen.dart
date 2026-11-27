@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../database/database_helper.dart';
 import '../models/juego.dart';
@@ -14,7 +15,10 @@ import '../widgets/responsive_container.dart';
 import 'game_detail_screen.dart';
 
 class LibraryScreen extends StatefulWidget {
-  const LibraryScreen({super.key});
+  /// Catálogo ya cargado por la Tienda, usado para juegos similares.
+  final List<Juego>? catalogo;
+
+  const LibraryScreen({super.key, this.catalogo});
 
   @override
   State<LibraryScreen> createState() => _LibraryScreenState();
@@ -29,11 +33,18 @@ class _LibraryScreenState extends State<LibraryScreen> {
   bool _modoOffline = false;
   String? _error;
 
+  final TextEditingController _busqueda = TextEditingController();
+  String _orden = 'Nombre';
+  bool _vistaLista = false;
+
   StreamSubscription<List<ConnectivityResult>>? _subRed;
+
+  static const _claveVista = 'biblioteca_vista_lista';
 
   @override
   void initState() {
     super.initState();
+    _cargarPreferencias();
     _cargarBiblioteca();
     // Comprar desde la Tienda debe reflejarse aunque esta pantalla ya esté
     // montada (los shells mantienen vivas sus pestañas).
@@ -54,10 +65,46 @@ class _LibraryScreenState extends State<LibraryScreen> {
     if (mounted) _cargarBiblioteca();
   }
 
+  Future<void> _cargarPreferencias() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() => _vistaLista = prefs.getBool(_claveVista) ?? false);
+  }
+
+  Future<void> _cambiarVista(bool lista) async {
+    setState(() => _vistaLista = lista);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_claveVista, lista);
+  }
+
+  List<Juego> get _juegosVisibles {
+    final texto = _busqueda.text.trim().toLowerCase();
+    final visibles = _misJuegos.where((juego) {
+      if (texto.isEmpty) return true;
+      return juego.titulo.toLowerCase().contains(texto) ||
+          juego.categoria.toLowerCase().contains(texto) ||
+          juego.desarrollador.toLowerCase().contains(texto);
+    }).toList();
+
+    switch (_orden) {
+      case 'Precio':
+        visibles.sort((a, b) => b.precio.compareTo(a.precio));
+      case 'Recientes':
+        visibles.sort((a, b) => b.id.compareTo(a.id));
+      case 'Desarrollador':
+        visibles.sort((a, b) =>
+            a.desarrollador.toLowerCase().compareTo(b.desarrollador.toLowerCase()));
+      default:
+        visibles.sort((a, b) => a.titulo.toLowerCase().compareTo(b.titulo.toLowerCase()));
+    }
+    return visibles;
+  }
+
   @override
   void dispose() {
     SessionController.bibliotecaActualizada.removeListener(_recargar);
     _subRed?.cancel();
+    _busqueda.dispose();
     super.dispose();
   }
 
@@ -208,7 +255,14 @@ class _LibraryScreenState extends State<LibraryScreen> {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => GameDetailScreen(juego: juego, enBiblioteca: true),
+        builder: (_) => GameDetailScreen(
+          juego: juego,
+          enBiblioteca: true,
+          relacionados: widget.catalogo
+              ?.where((otro) => otro.id != juego.id)
+              .take(6)
+              .toList(),
+        ),
       ),
     );
   }
@@ -429,9 +483,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        kIsWeb
-                            ? '${_misJuegos.length} juegos · administra descargas y favoritos'
-                            : '${_misJuegos.length} juegos en tu biblioteca',
+                        '${_misJuegos.length} juegos · '
+                        '${_misJuegos.where((j) => j.esFavorito).length} favoritos · '
+                        '${_descargados.length} descargas',
                         style: TextStyle(
                           color: AppPalette.textoSuave,
                           fontSize: 13,
@@ -469,6 +523,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
                 ),
               ],
             ),
+            const SizedBox(height: 16),
+            _controles(),
             const SizedBox(height: 16),
             Expanded(
               child: _cargando
@@ -509,7 +565,14 @@ class _LibraryScreenState extends State<LibraryScreen> {
                                 style: TextStyle(color: AppPalette.textoSuave),
                               ),
                             )
-                          : LayoutBuilder(
+                          : _juegosVisibles.isEmpty
+                              ? const Center(
+                                  child: Text(
+                                    'No hay juegos que coincidan con tu búsqueda.',
+                                    style: TextStyle(color: Colors.white54),
+                                  ),
+                                )
+                              : LayoutBuilder(
                               builder: (context, constraints) {
                                 final ancho = constraints.maxWidth;
                                 final columnas = ancho >= 1100
@@ -517,6 +580,16 @@ class _LibraryScreenState extends State<LibraryScreen> {
                                     : ancho >= 750 && (kIsWeb || ancho >= 1000)
                                         ? 3
                                         : 2;
+                                if (_vistaLista) {
+                                  return ListView.separated(
+                                    itemCount: _juegosVisibles.length,
+                                    separatorBuilder: (_, __) =>
+                                        const SizedBox(height: 8),
+                                    itemBuilder: (context, index) =>
+                                        _buildLibraryListTile(
+                                            _juegosVisibles[index]),
+                                  );
+                                }
                                 return GridView.builder(
                                   gridDelegate:
                                       SliverGridDelegateWithFixedCrossAxisCount(
@@ -525,12 +598,156 @@ class _LibraryScreenState extends State<LibraryScreen> {
                                     mainAxisSpacing: 20,
                                     childAspectRatio: 0.72,
                                   ),
-                                  itemCount: _misJuegos.length,
+                                  itemCount: _juegosVisibles.length,
                                   itemBuilder: (context, index) =>
-                                      _buildLibraryCard(_misJuegos[index]),
+                                      _buildLibraryCard(_juegosVisibles[index]),
                                 );
                               },
                             ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _controles() {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final ancho = constraints.maxWidth;
+        return Wrap(
+          spacing: 12,
+          runSpacing: 12,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            SizedBox(
+              width: ancho < 600 ? double.infinity : 260,
+              child: TextField(
+                controller: _busqueda,
+                onChanged: (_) => setState(() {}),
+                style: const TextStyle(color: Colors.white, fontSize: 13),
+                decoration: InputDecoration(
+                  hintText: 'Buscar en tu biblioteca...',
+                  hintStyle: const TextStyle(color: Colors.white38),
+                  prefixIcon: const Icon(Icons.search,
+                      color: AppPalette.acentoPrincipal, size: 18),
+                  filled: true,
+                  fillColor: AppPalette.panel,
+                  isDense: true,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: const BorderSide(color: AppPalette.borde),
+                  ),
+                ),
+              ),
+            ),
+            PopupMenuButton<String>(
+              initialValue: _orden,
+              onSelected: (valor) => setState(() => _orden = valor),
+              itemBuilder: (_) => const [
+                PopupMenuItem(value: 'Nombre', child: Text('Ordenar: nombre')),
+                PopupMenuItem(value: 'Precio', child: Text('Ordenar: precio')),
+                PopupMenuItem(
+                    value: 'Recientes', child: Text('Ordenar: recientes')),
+                PopupMenuItem(
+                    value: 'Desarrollador',
+                    child: Text('Ordenar: desarrollador')),
+              ],
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: AppPalette.panel,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: AppPalette.borde),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.sort,
+                        size: 16, color: AppPalette.acentoPrincipal),
+                    const SizedBox(width: 6),
+                    Text(_orden,
+                        style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                  ],
+                ),
+              ),
+            ),
+            ToggleButtons(
+              isSelected: [!_vistaLista, _vistaLista],
+              onPressed: (i) => _cambiarVista(i == 1),
+              color: AppPalette.textoSuave,
+              selectedColor: Colors.black,
+              fillColor: AppPalette.acentoPrincipal,
+              borderColor: AppPalette.borde,
+              selectedBorderColor: AppPalette.acentoPrincipal,
+              borderRadius: BorderRadius.circular(8),
+              constraints: const BoxConstraints(minWidth: 42, minHeight: 38),
+              children: const [
+                Tooltip(
+                    message: 'Vista de cuadrícula',
+                    child: Icon(Icons.grid_view_rounded, size: 17)),
+                Tooltip(
+                    message: 'Vista de lista',
+                    child: Icon(Icons.view_list, size: 17)),
+              ],
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildLibraryListTile(Juego juego) {
+    final descargado = kIsWeb && _descargados.contains(juego.id);
+    return Card(
+      color: AppPalette.panel,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: ListTile(
+        onTap: () => _abrirDetalle(juego),
+        leading: ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: Image.network(
+            juego.portadaUrl,
+            width: 74,
+            height: 56,
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => Container(
+              width: 74,
+              height: 56,
+              color: AppPalette.borde,
+              child: Icon(Icons.gamepad,
+                  color: AppPalette.acentoPrincipal, size: 22),
+            ),
+          ),
+        ),
+        title: Text(juego.titulo,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+        subtitle: Text(
+          '${juego.categoria} · ${juego.desarrollador}'
+          '${descargado ? ' · Descargado en este navegador' : ''}',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(color: Colors.white54, fontSize: 11),
+        ),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              '\$${juego.precio.toStringAsFixed(2)}',
+              style: const TextStyle(
+                color: AppPalette.acentoPrincipal,
+                fontWeight: FontWeight.bold,
+                fontSize: 13,
+              ),
+            ),
+            const SizedBox(width: 4),
+            IconButton(
+              tooltip: 'Opciones de ${juego.titulo}',
+              icon: const Icon(Icons.more_horiz, color: Colors.white70),
+              onPressed: () => _menuOpciones(juego),
             ),
           ],
         ),

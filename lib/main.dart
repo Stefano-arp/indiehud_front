@@ -11,6 +11,7 @@ import 'screens/profile_screen.dart';
 import 'screens/steam_web_shell.dart';
 import 'screens/tickets_screen.dart';
 import 'theme/app_palette.dart';
+import 'widgets/store_sections.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -372,23 +373,27 @@ class _HomeScreenState extends State<HomeScreen> {
                               child: Text('No se encontraron juegos.'))
                           : ListView(
                               children: [
-                                const Text(
-                                  'Juegos destacados',
-                                  style: TextStyle(
-                                      fontSize: 18,
-                                      fontWeight: FontWeight.bold),
-                                ),
-                                const SizedBox(height: 12),
                                 _buildFeaturedCard(_juegos.first),
-                                const SizedBox(height: 24),
-                                const Text(
-                                  'Tendencias',
-                                  style: TextStyle(
-                                      fontSize: 18,
-                                      fontWeight: FontWeight.bold),
-                                ),
+                                const SizedBox(height: 28),
+                                if (_searchController.text.trim().isEmpty &&
+                                    _categoriaSeleccionada == 'Todos')
+                                  SeccionesTienda(
+                                    juegos: _juegos,
+                                    onAbrir: (juego) =>
+                                        _abrirDetalle(juego, catalogo: _juegos),
+                                  )
+                                else
+                                  const Text(
+                                    'Resultados de tu búsqueda',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
                                 const SizedBox(height: 12),
-                                ..._juegos.map((juego) => _buildTrendingItem(juego)),
+                                ..._juegos.map(
+                                  (juego) => _buildTrendingItem(juego),
+                                ),
                               ],
                             ),
             ),
@@ -398,16 +403,24 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  void _abrirDetalle(Juego juego) {
+  void _abrirDetalle(Juego juego, {List<Juego>? catalogo}) {
     Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => GameDetailScreen(juego: juego)),
+      MaterialPageRoute(
+        builder: (_) => GameDetailScreen(
+          juego: juego,
+          relacionados: catalogo
+              ?.where((otro) => otro.id != juego.id)
+              .take(6)
+              .toList(),
+        ),
+      ),
     );
   }
 
   Widget _buildFeaturedCard(Juego juego) {
     return GestureDetector(
-      onTap: () => _abrirDetalle(juego),
+      onTap: () => _abrirDetalle(juego, catalogo: _juegos),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(16),
         child: Container(
@@ -510,7 +523,8 @@ class _HomeScreenState extends State<HomeScreen> {
                               shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(12)),
                             ),
-                            onPressed: () => _abrirDetalle(juego),
+                            onPressed: () =>
+                                _abrirDetalle(juego, catalogo: _juegos),
                             child: const Text('Ver juego',
                                 style: TextStyle(fontWeight: FontWeight.bold)),
                           )
@@ -529,7 +543,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildTrendingItem(Juego juego) {
     return GestureDetector(
-      onTap: () => _abrirDetalle(juego),
+      onTap: () => _abrirDetalle(juego, catalogo: _juegos),
       child: Card(
         color: const Color(0xFF1E1E1E),
         margin: const EdgeInsets.only(bottom: 12),

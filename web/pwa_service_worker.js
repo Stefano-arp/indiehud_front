@@ -1,6 +1,6 @@
 // Service worker propio de IndieHub (Flutter 3.50 ya no genera caché offline).
 // Se copia a build/web/flutter_service_worker.js con scripts/build_web_pwa.sh.
-const CACHE = 'indiehub-shell-v2';
+const CACHE = 'indiehub-shell-v3';
 
 const CORE = [
   './',

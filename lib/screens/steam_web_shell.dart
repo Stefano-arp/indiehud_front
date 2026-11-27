@@ -7,6 +7,7 @@ import '../models/juego.dart';
 import '../services/api_service.dart';
 import '../services/session_controller.dart';
 import '../theme/app_palette.dart';
+import '../widgets/store_sections.dart';
 import 'game_detail_screen.dart';
 import 'library_screen.dart';
 import 'profile_screen.dart';
@@ -28,9 +29,20 @@ class FiltrosTienda {
   final ValueNotifier<List<String>> categorias =
       ValueNotifier<List<String>>(['Todos']);
 
+  /// Un solo buscador para toda la web: vive en la cabecera y el catálogo
+  /// escucha este valor, evitando dos campos de búsqueda simultáneos.
+  final ValueNotifier<String> busqueda = ValueNotifier<String>('');
+  final TextEditingController controlBusqueda = TextEditingController();
+
+  /// Último catálogo cargado por la Tienda; se reutiliza en la biblioteca para
+  /// ofrecer juegos similares sin otra petición.
+  List<Juego> ultimoCatalogo = const [];
+
   void dispose() {
     categoria.dispose();
     categorias.dispose();
+    busqueda.dispose();
+    controlBusqueda.dispose();
   }
 }
 
@@ -128,7 +140,9 @@ class _SteamWebShellState extends State<SteamWebShell> {
         final ancho = MediaQuery.sizeOf(context).width;
         final enTienda = _indice == 0;
         final pantalla = switch (_indice) {
-          1 => const LibraryScreen(),
+          1 => LibraryScreen(
+              catalogo: _filtros.ultimoCatalogo,
+            ),
           2 => const TicketsScreen(),
           3 => const ProfileScreen(),
           _ => SteamWebHome(filtros: _filtros, mostrarChips: ancho < 900),
@@ -150,6 +164,7 @@ class _SteamWebShellState extends State<SteamWebShell> {
                   ],
                 ),
               ),
+              _pie(conSesion),
             ],
           ),
         );
@@ -158,113 +173,226 @@ class _SteamWebShellState extends State<SteamWebShell> {
   }
 
   Widget _barraSuperior(double ancho, bool conSesion) {
+    final conEtiquetas = ancho >= 1100;
     return Container(
       height: 64,
-      color: _panelClaro,
-      padding: EdgeInsets.zero,
+      decoration: BoxDecoration(
+        color: _panelClaro,
+        border: Border(bottom: BorderSide(color: _borde)),
+      ),
       child: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 1320),
           child: Padding(
             padding: EdgeInsets.symmetric(horizontal: ancho < 700 ? 12 : 28),
             child: Row(
-        children: [
-          Container(
-            width: 36,
-            height: 36,
-            color: _neon,
-            child: const Icon(Icons.sports_esports,
-                color: Colors.black, size: 21),
-          ),
-          const SizedBox(width: 10),
-          Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('IndieHub',
-                  style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 1)),
-              Text('TIENDA INDIE',
-                  style: TextStyle(
-                      color: _morado, fontSize: 9, letterSpacing: 2)),
-            ],
-          ),
-          const SizedBox(width: 24),
-          if (conSesion)
-            Flexible(
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  children: List.generate(_etiquetas.length, (i) {
-                    final activo = _indice == i;
-                    return Padding(
-                      padding: const EdgeInsets.only(right: 6),
-                      child: TextButton.icon(
-                        onPressed: () => _irA(i),
-                        icon: Icon(_iconos[i], size: 15),
-                        label: Text(
-                          _etiquetas[i].toUpperCase(),
-                          style: const TextStyle(
-                              fontSize: 11,
+              children: [
+                Container(
+                  width: 36,
+                  height: 36,
+                  color: _neon,
+                  child: const Icon(Icons.sports_esports,
+                      color: Colors.black, size: 21),
+                ),
+                const SizedBox(width: 10),
+                if (ancho >= 760)
+                  Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('IndieHub',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 18,
                               fontWeight: FontWeight.bold,
-                              letterSpacing: 1),
+                              letterSpacing: 1)),
+                      Text('TIENDA INDIE',
+                          style: TextStyle(
+                              color: _morado, fontSize: 9, letterSpacing: 2)),
+                    ],
+                  ),
+                const SizedBox(width: 18),
+                if (conSesion)
+                  Flexible(
+                    flex: 3,
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: List.generate(_etiquetas.length, (i) {
+                          return _botonNavegacion(i, conEtiquetas);
+                        }),
+                      ),
+                    ),
+                  ),
+                if (_indice == 0)
+                  Flexible(
+                    flex: 2,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(
+                          minWidth: 130,
+                          maxWidth: 320,
                         ),
-                        style: TextButton.styleFrom(
-                          foregroundColor: activo ? _acento : _texto,
-                          backgroundColor: activo
-                              ? _borde.withValues(alpha: 0.5)
-                              : Colors.transparent,
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 10),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(6)),
+                        child: _campoBusqueda(),
+                      ),
+                    ),
+                  ),
+                const Spacer(),
+                if (conSesion) ...[
+                  if (ancho >= 900 && _nombreUsuario.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 110),
+                        child: Text(
+                          _nombreUsuario,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: _texto, fontSize: 12),
                         ),
                       ),
-                    );
-                  }),
-                ),
-              ),
+                    ),
+                  TextButton.icon(
+                    onPressed: _cerrarSesion,
+                    icon: const Icon(Icons.logout, size: 16),
+                    label: ancho >= 600
+                        ? const Text('Cerrar sesión',
+                            style: TextStyle(fontSize: 12))
+                        : const SizedBox.shrink(),
+                    style: TextButton.styleFrom(foregroundColor: _texto),
+                  ),
+                ] else
+                  ElevatedButton.icon(
+                    onPressed: () => _irA(3),
+                    icon: const Icon(Icons.login, size: 16),
+                    label: const Text('Iniciar sesión',
+                        style: TextStyle(fontWeight: FontWeight.bold)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _neon,
+                      foregroundColor: Colors.black,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(6)),
+                    ),
+                  ),
+              ],
             ),
-          const Spacer(),
-          if (conSesion) ...[
-            if (ancho >= 900)
-              Padding(
-                padding: const EdgeInsets.only(right: 10),
-                child: Text(_nombreUsuario.isEmpty ? 'Mi cuenta' : _nombreUsuario,
-                    style: const TextStyle(
-                        color: _texto, fontSize: 12)),
-              ),
-            TextButton.icon(
-              onPressed: _cerrarSesion,
-              icon: const Icon(Icons.logout, size: 16),
-              label: ancho >= 600
-                  ? const Text('Cerrar sesión',
-                      style: TextStyle(fontSize: 12))
-                  : const SizedBox.shrink(),
-              style: TextButton.styleFrom(foregroundColor: _texto),
-            ),
-          ] else
-            ElevatedButton.icon(
-              onPressed: () => _irA(3),
-              icon: const Icon(Icons.login, size: 16),
-              label: const Text('Iniciar sesión',
-                  style: TextStyle(fontWeight: FontWeight.bold)),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _neon,
-                foregroundColor: Colors.black,
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(6)),
-              ),
-            ),
-            ],
           ),
         ),
       ),
-    ),
-  );
+    );
+  }
+
+  Widget _botonNavegacion(int indice, bool conEtiquetas) {
+    final activo = _indice == indice;
+    return Padding(
+      padding: const EdgeInsets.only(right: 4),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          border: Border(
+            bottom: BorderSide(
+              color: activo ? _neon : Colors.transparent,
+              width: 2,
+            ),
+          ),
+        ),
+        child: TextButton.icon(
+          onPressed: () => _irA(indice),
+          icon: Icon(_iconos[indice], size: 15),
+          label: conEtiquetas
+              ? Text(
+                  _etiquetas[indice].toUpperCase(),
+                  style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 1),
+                )
+              : const SizedBox.shrink(),
+          style: TextButton.styleFrom(
+            foregroundColor: activo ? _acento : _texto,
+            backgroundColor:
+                activo ? _borde.withValues(alpha: 0.5) : Colors.transparent,
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(6)),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _campoBusqueda() {
+    return ValueListenableBuilder<String>(
+      valueListenable: _filtros.busqueda,
+      builder: (context, valor, _) {
+        return TextField(
+          controller: _filtros.controlBusqueda,
+          onChanged: (texto) => _filtros.busqueda.value = texto,
+          style: const TextStyle(color: _texto, fontSize: 13),
+          decoration: InputDecoration(
+            hintText: 'Buscar juegos...',
+            hintStyle: const TextStyle(color: Colors.white38, fontSize: 13),
+            prefixIcon: const Icon(Icons.search, color: _acento, size: 18),
+            suffixIcon: valor.isEmpty
+                ? null
+                : IconButton(
+                    tooltip: 'Limpiar búsqueda',
+                    icon: const Icon(Icons.close, size: 16, color: _texto),
+                    onPressed: () {
+                      _filtros.controlBusqueda.clear();
+                      _filtros.busqueda.value = '';
+                    },
+                  ),
+            filled: true,
+            fillColor: _panel,
+            isDense: true,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(6),
+              borderSide: const BorderSide(color: _borde),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _pie(bool conSesion) {
+    final ancho = MediaQuery.sizeOf(context).width;
+    return Container(
+      height: 44,
+      decoration: BoxDecoration(
+        color: _panelClaro,
+        border: Border(top: BorderSide(color: _borde)),
+      ),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 1320),
+          child: Padding(
+            padding: EdgeInsets.symmetric(horizontal: ancho < 700 ? 12 : 28),
+            child: Row(
+              children: [
+                const Text(
+                  'IndieHub · Juegos independientes',
+                  style: TextStyle(color: Colors.white38, fontSize: 11),
+                ),
+                const Spacer(),
+                TextButton(
+                  onPressed: () => _irA(0),
+                  child: const Text('Catálogo',
+                      style: TextStyle(fontSize: 11, color: _texto)),
+                ),
+                if (conSesion && ancho >= 700)
+                  TextButton(
+                    onPressed: () => _irA(2),
+                    child: const Text('Centro de ayuda',
+                        style: TextStyle(fontSize: 11, color: _texto)),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _barraLateralFiltros() {
@@ -345,9 +473,9 @@ class _SteamWebShellState extends State<SteamWebShell> {
   }
 }
 
-/// Catálogo web: hero + buscador + grilla responsive.
-/// Las categorías viven en [filtros] para que el lateral y el catálogo
-/// compartan exactamente el mismo estado.
+/// Catálogo web: hero, secciones tipo escaparate y grilla responsive.
+/// El buscador y las categorías viven en [filtros] para que la cabecera,
+/// el lateral y el catálogo compartan exactamente el mismo estado.
 class SteamWebHome extends StatefulWidget {
   final FiltrosTienda filtros;
   final bool mostrarChips;
@@ -366,7 +494,6 @@ class _SteamWebHomeState extends State<SteamWebHome> {
   List<Juego> _juegos = [];
   bool _cargando = true;
   String? _error;
-  final TextEditingController _busqueda = TextEditingController();
   Timer? _debounce;
   int _requestId = 0;
 
@@ -374,18 +501,24 @@ class _SteamWebHomeState extends State<SteamWebHome> {
   void initState() {
     super.initState();
     widget.filtros.categoria.addListener(_alCambiarCategoria);
+    widget.filtros.busqueda.addListener(_alCambiarBusqueda);
     _cargar();
   }
 
   @override
   void dispose() {
     widget.filtros.categoria.removeListener(_alCambiarCategoria);
+    widget.filtros.busqueda.removeListener(_alCambiarBusqueda);
     _debounce?.cancel();
-    _busqueda.dispose();
     super.dispose();
   }
 
   void _alCambiarCategoria() => _cargar();
+
+  void _alCambiarBusqueda() {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 300), _cargar);
+  }
 
   static bool _mismasCategorias(List<String> a, List<String> b) {
     if (a.length != b.length) return false;
@@ -395,7 +528,7 @@ class _SteamWebHomeState extends State<SteamWebHome> {
     return true;
   }
 
-  Future<void> _cargar({String? buscar}) async {
+  Future<void> _cargar() async {
     final id = ++_requestId;
     setState(() {
       _cargando = true;
@@ -403,7 +536,7 @@ class _SteamWebHomeState extends State<SteamWebHome> {
     });
     try {
       final juegos = await ApiService.obtenerJuegos(
-        buscar: buscar ?? _busqueda.text,
+        buscar: widget.filtros.busqueda.value,
         categoria: widget.filtros.categoria.value,
       );
       if (id != _requestId || !mounted) return;
@@ -423,6 +556,7 @@ class _SteamWebHomeState extends State<SteamWebHome> {
         widget.filtros.categoria.value = 'Todos';
         return;
       }
+      widget.filtros.ultimoCatalogo = juegos;
       setState(() {
         _juegos = juegos;
         _cargando = false;
@@ -463,8 +597,16 @@ class _SteamWebHomeState extends State<SteamWebHome> {
                   children: [
                     _hero(ancho),
                     const SizedBox(height: 24),
-                    _buscador(ancho),
-                    const SizedBox(height: 24),
+                    if (widget.mostrarChips) _chips(),
+                    if (widget.mostrarChips) const SizedBox(height: 24),
+                    if (widget.filtros.busqueda.value.isEmpty &&
+                        widget.filtros.categoria.value == 'Todos') ...[
+                      SeccionesTienda(
+                        juegos: _juegos,
+                        onAbrir: (juego) => _abrirDetalle(juego),
+                      ),
+                      const SizedBox(height: 28),
+                    ],
                     Row(
                       children: [
                         const Text('EXPLORA EL CATÁLOGO',
@@ -584,70 +726,38 @@ class _SteamWebHomeState extends State<SteamWebHome> {
     );
   }
 
-  Widget _buscador(double ancho) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SizedBox(
-          width: ancho < 700 ? double.infinity : 380,
-          child: TextField(
-            controller: _busqueda,
-            onChanged: (v) {
-              _debounce?.cancel();
-              _debounce = Timer(
-                const Duration(milliseconds: 300),
-                () => _cargar(buscar: v),
-              );
-            },
-            style: const TextStyle(color: _texto),
-            decoration: InputDecoration(
-              hintText: 'Buscar juegos...',
-              hintStyle: const TextStyle(color: Colors.white38),
-              prefixIcon: const Icon(Icons.search, color: _acento),
-              filled: true,
-              fillColor: _panel,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(6),
-                borderSide: const BorderSide(color: _borde),
-              ),
-            ),
-          ),
-        ),
-        // En pantallas estrechas no hay lateral: los filtros van aquí.
-        if (widget.mostrarChips) ...[
-          const SizedBox(height: 14),
-          ValueListenableBuilder<List<String>>(
-            valueListenable: widget.filtros.categorias,
-            builder: (context, categorias, _) {
-              return Wrap(
-                spacing: 8,
-                children: categorias.map((cat) {
-                  return ValueListenableBuilder<String>(
-                    valueListenable: widget.filtros.categoria,
-                    builder: (context, seleccionada, _) {
-                      final activo = cat == seleccionada;
-                      return ChoiceChip(
-                        label: Text(cat),
-                        selected: activo,
-                        selectedColor: _neon,
-                        backgroundColor: _panel,
-                        side: const BorderSide(color: _borde),
-                        labelStyle: TextStyle(
-                          color: activo ? Colors.black : _texto,
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                        ),
-                        onSelected: (_) =>
-                            widget.filtros.categoria.value = cat,
-                      );
-                    },
-                  );
-                }).toList(),
-              );
-            },
-          ),
-        ],
-      ],
+  /// En pantallas estrechas no hay lateral: los filtros van aquí.
+  /// El buscador vive en la cabecera, así que aquí solo hay categorías.
+  Widget _chips() {
+    return ValueListenableBuilder<List<String>>(
+      valueListenable: widget.filtros.categorias,
+      builder: (context, categorias, _) {
+        return Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: categorias.map((cat) {
+            return ValueListenableBuilder<String>(
+              valueListenable: widget.filtros.categoria,
+              builder: (context, seleccionada, _) {
+                final activo = cat == seleccionada;
+                return ChoiceChip(
+                  label: Text(cat),
+                  selected: activo,
+                  selectedColor: _neon,
+                  backgroundColor: _panel,
+                  side: const BorderSide(color: _borde),
+                  labelStyle: TextStyle(
+                    color: activo ? Colors.black : _texto,
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                  ),
+                  onSelected: (_) => widget.filtros.categoria.value = cat,
+                );
+              },
+            );
+          }).toList(),
+        );
+      },
     );
   }
 
@@ -774,7 +884,15 @@ class _SteamWebHomeState extends State<SteamWebHome> {
   void _abrirDetalle(Juego juego) {
     Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => GameDetailScreen(juego: juego)),
+      MaterialPageRoute(
+        builder: (_) => GameDetailScreen(
+          juego: juego,
+          relacionados: _juegos
+              .where((otro) => otro.id != juego.id)
+              .take(6)
+              .toList(),
+        ),
+      ),
     );
   }
 }
